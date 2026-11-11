@@ -1,31 +1,28 @@
-// tento bordel dole upratat! pozriet datasheet espcka a rozhodnut o spravnych pinoch
-
 #include <Arduino.h>
 #include "control.cpp"
+#include <HX711.h>
 TaskHandle_t CriticalTask;
-#define TXD1 19
-#define RXD1 21
+HX711 scale;
+
 constexpr int TC_CLK_PIN = 5;
 constexpr int TC_CS_PIN = 4;
 constexpr int TC_DO_PIN = 2;
-unsigned long lastAttempt = 0;
 const int minThreshold = 5;    // gnd
 const int maxThreshold = 1018; // vcc
-#include <HX711.h>
-HX711 scale;
+const int initializedCounterMax = 5;
+unsigned long lastAttempt = 0;
 char incomingByte;
 bool abortActivated = false;
+int initiliazedCounter = 0;
+
+#define TXD1 19
+#define RXD1 21
 #define DOUT 16
 #define CLK  17
-#define PIN_BATTERY 34
-
+#define PIN_BATTERY 13
 #define VALVE1 27
 #define VALVE2 14
-
 #define IGNITER 12
-
-const int initializedCounterMax = 5;
-int initiliazedCounter = 0;
 
 enum FlightState {
     STATE_IDLE,
@@ -78,6 +75,7 @@ struct telemetryData
 telemetryData currentData;
 
 FlightState currentState = STATE_IDLE;
+CommunicationStatus currentStatus = COMMUNICATION_PENDING;
 
 
 // prejst si tu spravne prepocty
@@ -85,7 +83,7 @@ telemetryData sendTelemetry()
 {
   currentData.pressureRaw = analogRead(20);
   currentData.pressure = (currentData.pressureRaw/4095.0) * 25.0;
-  currentData.thrust = scale.get_units(10);
+  currentData.thrust = scale.get_units(4);
   currentData.combustionPressureRaw = analogRead(21);
   currentData.combustionPressure = (currentData.combustionPressureRaw/4095.0) * 25.0;
   currentData.rawVoltage = analogReadMilliVolts(PIN_BATTERY);
@@ -126,16 +124,21 @@ ForceSensorStatus forceSensorStatusInitialization()
 {
   telemetryData currentData = sendTelemetry();
 
-  if (scale.is_ready()) return SENSOR_OK_NEWTONMETER;
-  else 
+  if (scale.is_ready())
   {
     initiliazedCounter++;
+    return SENSOR_OK_NEWTONMETER;
+  }
+  else 
+  {
     return SENSOR_UNFUNCTIONAL_NEWTONMETER;
   }
 }
 
 CommunicationStatus communicationChannelInitialization()
 {
+  Serial1.println('O');
+
   if (Serial1.available()) 
   {
     incomingByte = Serial.read();
@@ -151,6 +154,8 @@ CommunicationStatus communicationChannelInitialization()
         lastAttempt = millis();
         return COMMUNICATION_LOST;
       }
+
+      lastAttempt = 0;
     }
   }
   else
@@ -160,6 +165,8 @@ CommunicationStatus communicationChannelInitialization()
       lastAttempt = millis();
       return COMMUNICATION_LOST;
     }
+
+    lastAttempt = 0;
   }
 
   return COMMUNICATION_PENDING;
@@ -179,7 +186,7 @@ BatteryStatus batteryStatusInitialization()
 
 FlightState checkInitialization()
 {
-  if (initiliazedCounter == initializedCounterMax)
+  if (initiliazedCounter >= initializedCounterMax)
   {
     return STATE_ARMED;
   }
@@ -202,18 +209,24 @@ void closeValve()
 
 void ignite()
 {
-  openValve();
-  digitalWrite(IGNITER, HIGH);
+  if (currentState == STATE_ARMED)
+  {
+    openValve();
+    digitalWrite(IGNITER, HIGH);
+  }
 }
 
 void stop()
 {
   closeValve();
+  digitalWrite(IGNITER, LOW);
 
    if (millis() - lastAttempt >= 500) {
         lastAttempt = millis();
         closeValve();
     }
+
+    lastAttempt = 0;
   abortActivated = true;
 }
 
@@ -257,18 +270,20 @@ void loopCritical(void * pvParameters) { // burn and stop check
       if (millis() >= 30 && currentData.combustionPressure >= 12.2) 
       {
         stop();
+        lastAttempt = 0;
       }
     }
 
     // pozriet tlak v potrubii to iste s expo. rastom, tlak v potrubii a ostatne az po mojich vypoctoch :)
 
-    incomingByte = Serial.read();
+    incomingByte = Serial1.read();
     if (incomingByte != 'O')
     {
       if (millis() - lastAttempt >= 500) 
       {
         lastAttempt = millis();
         stop();
+        lastAttempt = 0;
       }
     }
 
@@ -281,24 +296,25 @@ void loop() {
   button_state = digitalRead(START_PIN);
   if (button_state == LOW)
   {
-    FlightState currentState = STATE_IGNITION;
-    delay(500);
+    currentState = STATE_IGNITION;
     currentState = STATE_BURN;
   }
 
   if (abortActivated == true)
   {
-    FlightState currentState = STATE_ABORT;
+    currentState = STATE_ABORT;
   }
 
-  incomingByte = Serial.read();
+  incomingByte = Serial1.read();
   if (incomingByte != 'O')
   {
     if (millis() - lastAttempt >= 500) 
     {
       lastAttempt = millis();
-      CommunicationStatus currentStatus = COMMUNICATION_LOST; // udajne to je iba lokalne, overit u jura
+      currentStatus = COMMUNICATION_LOST;
     }
+
+    lastAttempt = 0;
   }
   else CommunicationStatus currentStatus = COMMUNICATION_ESTABLISHED;
 

@@ -8,19 +8,41 @@
 int button_state = 0;
 int button_state1 = 0; 
 
-// treba poslat bity typu 'O' je to ocko len velke O
+enum CommunicationStatusControl {
+    COMMUNICATION_LOST_CONTROL,
+    COMMUNICATION_ESTABLISHED_CONTROL,
+    COMMUNICATION_PENDING_CONTROL,
+};
 
-void openCommunicationChannel()
+CommunicationStatusControl communicationChannelInitializationControl()
 {
-  Serial.println("CONNECTING TO INSTRUMENTS SYSTEM...");
-  if (Serial1.available()) {
-    String message = Serial1.readStringUntil('\n');
-    Serial.println("Received: " + message);
+  if (Serial1.available()) 
+  {
+    incomingByte = Serial.read();
+    if (incomingByte == 'O')
+    {
+      initiliazedCounter++;
+      return COMMUNICATION_ESTABLISHED_CONTROL;
+    }
+    else
+    {
+      if (millis() - lastAttempt >= 500) 
+      {
+        lastAttempt = millis();
+        return COMMUNICATION_LOST_CONTROL;
+      }
+    }
   }
   else
   {
-    stop();
+    if (millis() - lastAttempt >= 500) 
+    {
+      lastAttempt = millis();
+      return COMMUNICATION_LOST_CONTROL;
+    }
   }
+
+  return COMMUNICATION_PENDING_CONTROL;
 }
 
 void setup()
